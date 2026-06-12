@@ -145,7 +145,16 @@ make uninstall-shim  Remove the host Codex PATH shim
 rate(codex_speed_io_bytes_total{mode="tui",direction="output"}[30s])
 rate(codex_speed_estimated_tokens_total{mode="tui",direction="output"}[30s])
 rate(codex_speed_usage_tokens_total{mode="exec",kind="output"}[5m])
+sum(codex_speed_estimated_tokens_total{direction="output",accuracy="estimated"})
+sum(codex_speed_usage_tokens_total{kind="output",accuracy="exact"})
+avg(codex_speed_session_output_tokens_per_second{accuracy="estimated"})
+avg(codex_speed_session_output_tokens_per_second{accuracy="exact"})
 ```
+
+`codex_speed_session_output_tokens_per_second` is rendered only for active
+sessions. It reports average output tokens per second from `session_start` to
+the current scrape time, with `estimated` and `exact` accuracy labels kept
+separate.
 
 ## Deployment Runbook
 

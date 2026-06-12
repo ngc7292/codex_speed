@@ -32,7 +32,6 @@
           "color": {
             "mode": "thresholds"
           },
-          "mappings": [],
           "thresholds": {
             "mode": "absolute",
             "steps": [
@@ -72,7 +71,6 @@
         "textMode": "auto",
         "wideLayout": true
       },
-      "pluginVersion": "12.0.2",
       "targets": [
         {
           "datasource": {
@@ -127,7 +125,7 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "sum(codex_speed_sessions_active)",
+          "expr": "sum(codex_speed_sessions_active) or vector(0)",
           "legendFormat": "active",
           "refId": "A"
         }
@@ -142,7 +140,7 @@
       },
       "fieldConfig": {
         "defaults": {
-          "unit": "s"
+          "unit": "short"
         },
         "overrides": []
       },
@@ -152,7 +150,7 @@
         "x": 8,
         "y": 0
       },
-      "id": 3,
+      "id": 8,
       "options": {
         "colorMode": "value",
         "graphMode": "area",
@@ -175,12 +173,156 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "codex_speed_daemon_uptime_seconds",
-          "legendFormat": "uptime",
+          "expr": "sum(codex_speed_estimated_tokens_total{direction=\"output\",accuracy=\"estimated\"}) or vector(0)",
+          "legendFormat": "estimated output",
           "refId": "A"
         }
       ],
-      "title": "Daemon Uptime",
+      "title": "Estimated Output Tokens",
+      "type": "stat"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 4,
+        "x": 12,
+        "y": 0
+      },
+      "id": 9,
+      "options": {
+        "colorMode": "value",
+        "graphMode": "area",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "showPercentChange": false,
+        "textMode": "auto",
+        "wideLayout": true
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "sum(codex_speed_usage_tokens_total{kind=\"output\",accuracy=\"exact\"}) or vector(0)",
+          "legendFormat": "exact output",
+          "refId": "A"
+        }
+      ],
+      "title": "Exact Output Tokens",
+      "type": "stat"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ops"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 4,
+        "x": 16,
+        "y": 0
+      },
+      "id": 10,
+      "options": {
+        "colorMode": "value",
+        "graphMode": "area",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "showPercentChange": false,
+        "textMode": "auto",
+        "wideLayout": true
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "avg(codex_speed_session_output_tokens_per_second{accuracy=\"estimated\"}) or vector(0)",
+          "legendFormat": "estimated",
+          "refId": "A"
+        }
+      ],
+      "title": "Avg Active TGS Estimated",
+      "type": "stat"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ops"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 4,
+        "x": 20,
+        "y": 0
+      },
+      "id": 11,
+      "options": {
+        "colorMode": "value",
+        "graphMode": "area",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "showPercentChange": false,
+        "textMode": "auto",
+        "wideLayout": true
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "avg(codex_speed_session_output_tokens_per_second{accuracy=\"exact\"}) or vector(0)",
+          "legendFormat": "exact",
+          "refId": "A"
+        }
+      ],
+      "title": "Avg Active TGS Exact",
       "type": "stat"
     },
     {
@@ -291,7 +433,7 @@
       },
       "fieldConfig": {
         "defaults": {
-          "unit": "short"
+          "unit": "ops"
         },
         "overrides": []
       },
@@ -302,6 +444,52 @@
         "y": 12
       },
       "id": 6,
+      "options": {
+        "legend": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "displayMode": "table",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "none"
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "codex_speed_session_output_tokens_per_second",
+          "legendFormat": "{{mode}} {{session}} {{accuracy}}",
+          "refId": "A"
+        }
+      ],
+      "title": "Active Session TGS",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 12
+      },
+      "id": 7,
       "options": {
         "legend": {
           "calcs": [
@@ -343,11 +531,11 @@
       },
       "gridPos": {
         "h": 8,
-        "w": 12,
-        "x": 12,
-        "y": 12
+        "w": 24,
+        "x": 0,
+        "y": 20
       },
-      "id": 7,
+      "id": 12,
       "options": {
         "legend": {
           "calcs": [
@@ -402,6 +590,6 @@
   "timezone": "browser",
   "title": "Codex Speed",
   "uid": "codex-speed",
-  "version": 1,
+  "version": 2,
   "weekStart": ""
 }

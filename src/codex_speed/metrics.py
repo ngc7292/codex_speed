@@ -5,6 +5,7 @@ from __future__ import annotations
 import math
 import threading
 import time
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -93,11 +94,25 @@ class HistogramMetric:
         self.sums[key] = self.sums.get(key, 0.0) + value
 
 
+@dataclass
+class ActiveSession:
+    """Daemon-local state for active session throughput gauges."""
+
+    mode: str
+    started_at: float
+    estimated_output_tokens: float = 0.0
+    exact_output_tokens: float = 0.0
+    estimated_output_seen: bool = False
+    exact_output_seen: bool = False
+
+
 class MetricsRegistry:
     """In-memory Prometheus registry tailored to codex-speed metrics."""
 
-    def __init__(self) -> None:
+    def __init__(self, *, clock: Callable[[], float] | None = None) -> None:
+        self._clock = clock or time.time
         self._lock = threading.Lock()
+        self._active_sessions: dict[str, ActiveSession] = {}
         self.sessions_active = GaugeMetric(
             "codex_speed_sessions_active",
             "Active codex-speed wrapped sessions.",
@@ -135,7 +150,7 @@ class MetricsRegistry:
             "codex_speed_events_total",
             "Events accepted by the codex-speed daemon.",
         )
-        self.started_at = time.time()
+        self.started_at = self._clock()
 
     def apply_event(self, event: dict[str, Any]) -> None:
         """Apply one collector event to the registry."""
@@ -148,8 +163,13 @@ class MetricsRegistry:
             self.events_total.inc(1, type=event_type)
             if event_type == "session_start":
                 self.sessions_active.inc(1, mode=mode)
+                self._active_sessions[session] = ActiveSession(
+                    mode=mode,
+                    started_at=self._clock(),
+                )
             elif event_type == "session_end":
                 self.sessions_active.inc(-1, mode=mode)
+                self._active_sessions.pop(session, None)
             elif event_type == "io":
                 self._apply_io_event(event, mode, session)
             elif event_type == "usage":
@@ -181,12 +201,13 @@ class MetricsRegistry:
                 self.events_total,
             ):
                 lines.extend(_render_simple_metric(metric))
+            lines.extend(_render_active_session_tgs(self._active_sessions, self._clock()))
             lines.extend(_render_histogram(self.turn_duration_seconds))
             lines.extend(
                 [
                     "# HELP codex_speed_daemon_uptime_seconds Daemon uptime in seconds.",
                     "# TYPE codex_speed_daemon_uptime_seconds gauge",
-                    f"codex_speed_daemon_uptime_seconds {_format_float(time.time() - self.started_at)}",
+                    f"codex_speed_daemon_uptime_seconds {_format_float(self._clock() - self.started_at)}",
                 ]
             )
             return "\n".join(lines) + "\n"
@@ -220,6 +241,11 @@ class MetricsRegistry:
                 session=session,
                 accuracy="estimated",
             )
+            if direction == "output":
+                active_session = self._active_sessions.get(session)
+                if active_session is not None:
+                    active_session.estimated_output_tokens += estimated_tokens
+                    active_session.estimated_output_seen = True
 
     def _apply_usage_event(self, event: dict[str, Any], mode: str, session: str) -> None:
         usage = event.get("usage")
@@ -241,6 +267,11 @@ class MetricsRegistry:
                     session=session,
                     accuracy="exact",
                 )
+                if source_key == "output_tokens":
+                    active_session = self._active_sessions.get(session)
+                    if active_session is not None:
+                        active_session.exact_output_tokens += value
+                        active_session.exact_output_seen = True
 
 
 def _safe_label(value: object, *, default: str) -> str:
@@ -268,6 +299,34 @@ def _render_simple_metric(metric: CounterMetric | GaugeMetric) -> list[str]:
     ]
     for labels, value in sorted(metric.samples.items()):
         lines.append(f"{metric.name}{_format_labels(labels)} {_format_float(value)}")
+    return lines
+
+
+def _render_active_session_tgs(active_sessions: dict[str, ActiveSession], now: float) -> list[str]:
+    help_line = (
+        "# HELP codex_speed_session_output_tokens_per_second "
+        "Active session average output tokens per second."
+    )
+    lines = [
+        help_line,
+        "# TYPE codex_speed_session_output_tokens_per_second gauge",
+    ]
+    for session, active_session in sorted(active_sessions.items()):
+        elapsed = max(now - active_session.started_at, 0.0)
+        if active_session.estimated_output_seen:
+            value = active_session.estimated_output_tokens / elapsed if elapsed > 0 else 0.0
+            labels = _labels(mode=active_session.mode, session=session, accuracy="estimated")
+            lines.append(
+                f"codex_speed_session_output_tokens_per_second{_format_labels(labels)} "
+                f"{_format_float(value)}"
+            )
+        if active_session.exact_output_seen:
+            value = active_session.exact_output_tokens / elapsed if elapsed > 0 else 0.0
+            labels = _labels(mode=active_session.mode, session=session, accuracy="exact")
+            lines.append(
+                f"codex_speed_session_output_tokens_per_second{_format_labels(labels)} "
+                f"{_format_float(value)}"
+            )
     return lines
 
 
