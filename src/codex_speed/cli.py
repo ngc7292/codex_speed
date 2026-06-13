@@ -12,6 +12,7 @@ from codex_speed.daemon import run_daemon
 from codex_speed.events import DaemonAddress
 from codex_speed.exec_runner import run_exec
 from codex_speed.notifier_agent import send_test_notification
+from codex_speed.session_focus import focus_session
 from codex_speed.shim import install_shim, uninstall_shim
 from codex_speed.tui_runner import run_tui
 
@@ -89,6 +90,17 @@ def build_parser() -> argparse.ArgumentParser:
 
     subparsers.add_parser("notify-test", help="send a desktop notification test")
 
+    focus_parser = subparsers.add_parser(
+        "focus-session",
+        help="focus the terminal associated with a tracked session",
+    )
+    focus_parser.add_argument("session", help="codex-speed session id")
+    focus_parser.add_argument(
+        "--quiet",
+        action="store_true",
+        help="suppress status output; useful for notification click callbacks",
+    )
+
     exec_parser = subparsers.add_parser("exec", help="run codex exec --json and collect metrics")
     exec_parser.add_argument(
         "codex_args",
@@ -140,6 +152,12 @@ def main(argv: list[str] | None = None) -> None:
     if args.command == "notify-test":
         send_test_notification()
         return
+    if args.command == "focus-session":
+        result = focus_session(args.session)
+        if not args.quiet:
+            stream = sys.stdout if result.focused else sys.stderr
+            print(result.detail, file=stream)
+        raise SystemExit(0 if result.focused else 1)
     daemon_address: DaemonAddress = args.daemon
     if args.command == "install-shim":
         try:

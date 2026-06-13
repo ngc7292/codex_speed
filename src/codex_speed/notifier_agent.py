@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 import re
+import shutil
 import subprocess
 import sys
 import threading
@@ -13,6 +14,7 @@ from dataclasses import dataclass, field
 from typing import Protocol
 
 from codex_speed.ansi import strip_ansi
+from codex_speed.session_focus import SessionRegistry, build_focus_command, focus_session
 
 DEFAULT_PAUSE_SECONDS = 120.0
 DEFAULT_DEDUPE_SECONDS = 300.0
@@ -45,24 +47,68 @@ PAUSED_PROMPT_PATTERNS = (
 class Notifier(Protocol):
     """Notification sink."""
 
-    def notify(self, title: str, message: str) -> None:
+    def notify(self, title: str, message: str, *, session: str | None = None) -> None:
         """Send one user-visible notification."""
+
+
+class SessionStore(Protocol):
+    """Session metadata sink used by notification click callbacks."""
+
+    def start_session(self, session: str, mode: str) -> None:
+        """Persist one session focus target."""
+
+    def end_session(self, session: str) -> None:
+        """Mark one session focus target as ended."""
 
 
 class StderrNotifier:
     """Fallback notifier that writes to stderr."""
 
-    def notify(self, title: str, message: str) -> None:
+    def notify(self, title: str, message: str, *, session: str | None = None) -> None:
         print(f"codex-speed: {title}: {message}", file=sys.stderr)
 
 
 class MacOSNotifier:
     """macOS notification sink using AppleScript."""
 
-    def __init__(self, *, fallback: Notifier | None = None) -> None:
+    def __init__(
+        self,
+        *,
+        fallback: Notifier | None = None,
+        terminal_notifier: str | None = None,
+        focus_mode: str = "click",
+    ) -> None:
         self._fallback = fallback or StderrNotifier()
+        if terminal_notifier is not None:
+            self._terminal_notifier = terminal_notifier
+        else:
+            self._terminal_notifier = shutil.which("terminal-notifier")
+        self._focus_mode = focus_mode
 
-    def notify(self, title: str, message: str) -> None:
+    def notify(self, title: str, message: str, *, session: str | None = None) -> None:
+        if session and self._focus_mode == "immediate":
+            focus_session(session)
+        if session and self._focus_mode == "click" and self._terminal_notifier:
+            try:
+                subprocess.run(
+                    [
+                        self._terminal_notifier,
+                        "-title",
+                        title,
+                        "-message",
+                        message,
+                        "-group",
+                        f"codex-speed-{session}",
+                        "-execute",
+                        build_focus_command(session),
+                    ],
+                    check=True,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                )
+                return
+            except (OSError, subprocess.CalledProcessError, ValueError):
+                pass
         script = (
             f"display notification {_applescript_string(message)} "
             f"with title {_applescript_string(title)}"
@@ -75,14 +121,14 @@ class MacOSNotifier:
                 stderr=subprocess.DEVNULL,
             )
         except (OSError, subprocess.CalledProcessError):
-            self._fallback.notify(title, message)
+            self._fallback.notify(title, message, session=session)
 
 
-def default_notifier() -> Notifier:
+def default_notifier(*, focus_mode: str = "click") -> Notifier:
     """Return the best notifier for this host."""
 
     if sys.platform == "darwin":
-        return MacOSNotifier()
+        return MacOSNotifier(focus_mode=focus_mode)
     return StderrNotifier()
 
 
@@ -110,6 +156,7 @@ class AttentionAgent:
         check_interval_seconds: float = DEFAULT_CHECK_INTERVAL_SECONDS,
         clock: Callable[[], float] | None = None,
         enabled: bool = True,
+        session_registry: SessionStore | None = None,
     ) -> None:
         self._notifier = notifier or default_notifier()
         self._pause_seconds = max(pause_seconds, 1.0)
@@ -118,6 +165,7 @@ class AttentionAgent:
         self._clock = clock or time.monotonic
         self._enabled = enabled
         self._sessions: dict[str, AttentionSession] = {}
+        self._session_registry = session_registry
         self._lock = threading.Lock()
         self._stop_event = threading.Event()
         self._thread: threading.Thread | None = None
@@ -135,6 +183,11 @@ class AttentionAgent:
                 started_at=now,
                 last_activity_at=now,
             )
+        if self._session_registry is not None:
+            try:
+                self._session_registry.start_session(session, mode)
+            except OSError:
+                return
 
     def end_session(self, session: str) -> None:
         """Stop tracking a wrapped Codex session."""
@@ -143,6 +196,11 @@ class AttentionAgent:
             return
         with self._lock:
             self._sessions.pop(session, None)
+        if self._session_registry is not None:
+            try:
+                self._session_registry.end_session(session)
+            except OSError:
+                return
 
     def observe_input(self, session: str) -> None:
         """Mark user input activity for a session."""
@@ -245,7 +303,7 @@ class AttentionAgent:
             if last_notified_at is not None and now - last_notified_at < self._dedupe_seconds:
                 return
             tracked.notifications[key] = now
-        self._notifier.notify(title, f"{message} Session: {session[:8]}.")
+        self._notifier.notify(title, f"{message} Session: {session[:8]}.", session=session)
 
 
 def text_needs_permission_attention(text: str) -> bool:
@@ -283,8 +341,9 @@ def from_env(*, notifier: Notifier | None = None) -> AttentionAgent:
     """Build an attention agent using CODEX_SPEED_NOTIFY_* environment settings."""
 
     enabled = os.environ.get("CODEX_SPEED_NOTIFY", "1") not in FALSE_VALUES
+    focus_mode = _focus_mode_env()
     return AttentionAgent(
-        notifier=notifier,
+        notifier=notifier or default_notifier(focus_mode=focus_mode),
         pause_seconds=_float_env("CODEX_SPEED_NOTIFY_PAUSE_SECONDS", DEFAULT_PAUSE_SECONDS),
         dedupe_seconds=_float_env("CODEX_SPEED_NOTIFY_DEDUPE_SECONDS", DEFAULT_DEDUPE_SECONDS),
         check_interval_seconds=_float_env(
@@ -292,14 +351,26 @@ def from_env(*, notifier: Notifier | None = None) -> AttentionAgent:
             DEFAULT_CHECK_INTERVAL_SECONDS,
         ),
         enabled=enabled,
+        session_registry=SessionRegistry() if enabled and focus_mode != "off" else None,
     )
 
 
 def send_test_notification(*, notifier: Notifier | None = None) -> None:
     """Send one notification so users can verify desktop permissions."""
 
-    sink = notifier or default_notifier()
-    sink.notify("Codex Notification Test", "codex-speed desktop notifications are enabled.")
+    focus_mode = _focus_mode_env()
+    session = "notify-test" if focus_mode != "off" else None
+    if session is not None:
+        try:
+            SessionRegistry().start_session(session, "notify-test")
+        except OSError:
+            session = None
+    sink = notifier or default_notifier(focus_mode=focus_mode)
+    sink.notify(
+        "Codex Notification Test",
+        "codex-speed desktop notifications are enabled.",
+        session=session,
+    )
 
 
 def _decode_visible_text(data: bytes) -> str:
@@ -317,6 +388,15 @@ def _float_env(name: str, default: float) -> float:
     if parsed <= 0:
         return default
     return parsed
+
+
+def _focus_mode_env() -> str:
+    value = os.environ.get("CODEX_SPEED_NOTIFY_FOCUS", "click")
+    if value in FALSE_VALUES:
+        return "off"
+    if value in {"click", "immediate", "off"}:
+        return value
+    return "click"
 
 
 def _applescript_string(value: str) -> str:

@@ -102,7 +102,19 @@ to be waiting for approval, permission, or user input. It also notifies when an
 active session has produced output and then stays quiet for the pause timeout.
 
 The agent does not persist prompt or response text and does not send output
-text to Prometheus. To verify desktop notification permissions:
+text to Prometheus. On macOS, click-to-focus notifications use
+`terminal-notifier` when it is installed:
+
+```bash
+brew install terminal-notifier
+```
+
+Without `terminal-notifier`, `codex-speed` still sends ordinary macOS
+notifications through AppleScript, but those notifications cannot reliably run
+a click callback. Focus metadata is limited to the session id, tty, terminal
+app, process id, and timestamps under `~/.codex-speed/sessions`.
+
+To verify desktop notification permissions:
 
 ```bash
 make notify-test
@@ -112,8 +124,16 @@ Configuration:
 
 ```bash
 CODEX_SPEED_NOTIFY=0 codex ...
+CODEX_SPEED_NOTIFY_FOCUS=off codex ...
+CODEX_SPEED_NOTIFY_FOCUS=immediate codex ...
 CODEX_SPEED_NOTIFY_PAUSE_SECONDS=180 codex ...
 CODEX_SPEED_NOTIFY_DEDUPE_SECONDS=600 codex ...
+```
+
+You can also focus a tracked session manually:
+
+```bash
+codex-speed focus-session <session-id>
 ```
 
 ## Local Development
