@@ -124,6 +124,58 @@ class MetricsTests(unittest.TestCase):
 
         self.assertNotIn("codex_speed_session_output_tokens_per_second{", registry.render())
 
+    def test_registry_restores_active_estimated_tgs_from_late_io(self) -> None:
+        clock = FakeClock(400.0)
+        registry = MetricsRegistry(clock=clock)
+        registry.apply_event(
+            {
+                "type": "io",
+                "mode": "tui",
+                "session": "s1",
+                "direction": "output",
+                "stream": "pty",
+                "bytes": 40,
+                "visible_bytes": 40,
+                "estimated_tokens": 10,
+            }
+        )
+
+        clock.now = 405.0
+        rendered = registry.render()
+        self.assertIn('codex_speed_sessions_active{mode="tui"} 1', rendered)
+        self.assertIn(
+            'codex_speed_session_output_tokens_per_second{accuracy="estimated",'
+            'mode="tui",session="s1"} 2',
+            rendered,
+        )
+
+    def test_registry_restores_active_exact_tgs_from_late_usage(self) -> None:
+        clock = FakeClock(500.0)
+        registry = MetricsRegistry(clock=clock)
+        registry.apply_event(
+            {
+                "type": "usage",
+                "mode": "exec",
+                "session": "s1",
+                "usage": {"input_tokens": 10, "output_tokens": 15},
+            }
+        )
+
+        clock.now = 510.0
+        rendered = registry.render()
+        self.assertIn('codex_speed_sessions_active{mode="exec"} 1', rendered)
+        self.assertIn(
+            'codex_speed_session_output_tokens_per_second{accuracy="exact",'
+            'mode="exec",session="s1"} 1.5',
+            rendered,
+        )
+
+    def test_registry_ignores_unknown_session_end(self) -> None:
+        registry = MetricsRegistry()
+        registry.apply_event({"type": "session_end", "mode": "exec", "session": "missing"})
+
+        self.assertNotIn('codex_speed_sessions_active{mode="exec"}', registry.render())
+
 
 if __name__ == "__main__":
     unittest.main()

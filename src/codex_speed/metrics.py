@@ -162,14 +162,20 @@ class MetricsRegistry:
         with self._lock:
             self.events_total.inc(1, type=event_type)
             if event_type == "session_start":
-                self.sessions_active.inc(1, mode=mode)
+                previous = self._active_sessions.get(session)
+                if previous is None:
+                    self.sessions_active.inc(1, mode=mode)
+                elif previous.mode != mode:
+                    self.sessions_active.inc(-1, mode=previous.mode)
+                    self.sessions_active.inc(1, mode=mode)
                 self._active_sessions[session] = ActiveSession(
                     mode=mode,
                     started_at=self._clock(),
                 )
             elif event_type == "session_end":
-                self.sessions_active.inc(-1, mode=mode)
-                self._active_sessions.pop(session, None)
+                active_session = self._active_sessions.pop(session, None)
+                if active_session is not None:
+                    self.sessions_active.inc(-1, mode=active_session.mode)
             elif event_type == "io":
                 self._apply_io_event(event, mode, session)
             elif event_type == "usage":
@@ -242,7 +248,7 @@ class MetricsRegistry:
                 accuracy="estimated",
             )
             if direction == "output":
-                active_session = self._active_sessions.get(session)
+                active_session = self._active_session_for_event(event, mode, session)
                 if active_session is not None:
                     active_session.estimated_output_tokens += estimated_tokens
                     active_session.estimated_output_seen = True
@@ -268,10 +274,29 @@ class MetricsRegistry:
                     accuracy="exact",
                 )
                 if source_key == "output_tokens":
-                    active_session = self._active_sessions.get(session)
+                    active_session = self._active_session_for_event(event, mode, session)
                     if active_session is not None:
                         active_session.exact_output_tokens += value
                         active_session.exact_output_seen = True
+
+    def _active_session_for_event(
+        self,
+        event: dict[str, Any],
+        mode: str,
+        session: str,
+    ) -> ActiveSession | None:
+        active_session = self._active_sessions.get(session)
+        if active_session is not None:
+            return active_session
+
+        raw_session = event.get("session")
+        if raw_session is None or str(raw_session) == "":
+            return None
+
+        active_session = ActiveSession(mode=mode, started_at=self._clock())
+        self._active_sessions[session] = active_session
+        self.sessions_active.inc(1, mode=mode)
+        return active_session
 
 
 def _safe_label(value: object, *, default: str) -> str:
