@@ -11,6 +11,7 @@ from codex_speed.auto_runner import run_auto
 from codex_speed.daemon import run_daemon
 from codex_speed.events import DaemonAddress
 from codex_speed.exec_runner import run_exec
+from codex_speed.notifier_agent import send_test_notification
 from codex_speed.shim import install_shim, uninstall_shim
 from codex_speed.tui_runner import run_tui
 
@@ -86,6 +87,8 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
 
+    subparsers.add_parser("notify-test", help="send a desktop notification test")
+
     exec_parser = subparsers.add_parser("exec", help="run codex exec --json and collect metrics")
     exec_parser.add_argument(
         "codex_args",
@@ -133,6 +136,9 @@ def main(argv: list[str] | None = None) -> None:
     args = parser.parse_args(argv)
     if args.command == "daemon":
         run_daemon(args.listen.host, args.listen.port)
+        return
+    if args.command == "notify-test":
+        send_test_notification()
         return
     daemon_address: DaemonAddress = args.daemon
     if args.command == "install-shim":

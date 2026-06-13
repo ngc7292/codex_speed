@@ -15,6 +15,7 @@ from collections.abc import Sequence
 
 from codex_speed.ansi import visible_byte_count
 from codex_speed.events import DaemonAddress
+from codex_speed.notifier_agent import AttentionAgent, from_env
 from codex_speed.reporter import EventReporter
 from codex_speed.tokens import estimate_tokens_from_bytes
 
@@ -37,7 +38,10 @@ def run_tui(args: Sequence[str], address: DaemonAddress, *, codex_bin: str = "co
 
     session = str(uuid.uuid4())
     reporter = EventReporter(address)
+    attention = from_env()
     reporter.send({"type": "session_start", "mode": "tui", "session": session})
+    attention.start_session(session, "tui")
+    attention.start_background_checks()
     command = build_codex_tui_command(args, codex_bin=codex_bin)
     master_fd, slave_fd = pty.openpty()
     old_tty = termios.tcgetattr(sys.stdin.fileno()) if sys.stdin.isatty() else None
@@ -55,6 +59,8 @@ def run_tui(args: Sequence[str], address: DaemonAddress, *, codex_bin: str = "co
         print(f"codex-speed: failed to start Codex: {exc}", file=sys.stderr)
         reporter.send({"type": "child_exit", "mode": "tui", "session": session, "code": 127})
         reporter.send({"type": "session_end", "mode": "tui", "session": session})
+        attention.end_session(session)
+        attention.stop_background_checks()
         return 127
     os.close(slave_fd)
     _install_resize_forwarder(master_fd)
@@ -62,7 +68,7 @@ def run_tui(args: Sequence[str], address: DaemonAddress, *, codex_bin: str = "co
     try:
         if old_tty is not None:
             tty.setraw(sys.stdin.fileno())
-        return_code = _pump_pty(process, master_fd, reporter, session)
+        return_code = _pump_pty(process, master_fd, reporter, session, attention)
     except OSError as exc:
         print(f"codex-speed: TUI wrapper error: {exc}", file=sys.stderr)
         return_code = 1
@@ -72,6 +78,8 @@ def run_tui(args: Sequence[str], address: DaemonAddress, *, codex_bin: str = "co
         os.close(master_fd)
         reporter.send({"type": "child_exit", "mode": "tui", "session": session, "code": return_code})
         reporter.send({"type": "session_end", "mode": "tui", "session": session})
+        attention.end_session(session)
+        attention.stop_background_checks()
     return return_code
 
 
@@ -94,6 +102,7 @@ def _pump_pty(
     master_fd: int,
     reporter: EventReporter,
     session: str,
+    attention: AttentionAgent | None = None,
 ) -> int:
     stdin_fd = sys.stdin.fileno()
     stdout_fd = sys.stdout.fileno()
@@ -114,6 +123,8 @@ def _pump_pty(
             if data:
                 os.write(master_fd, data)
                 _report_io(reporter, session, "input", "stdin", data)
+                if attention is not None:
+                    attention.observe_input(session)
             else:
                 stdin_open = False
         if master_fd in readable:
@@ -125,6 +136,8 @@ def _pump_pty(
                 break
             os.write(stdout_fd, data)
             _report_io(reporter, session, "output", "pty", data)
+            if attention is not None:
+                attention.observe_output(session, data)
     return process.wait()
 
 

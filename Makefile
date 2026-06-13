@@ -2,7 +2,7 @@ PYTHON ?= python3
 COMPOSE_FILE := deploy/prometheus/docker-compose.yml
 COMPOSE := docker compose -f $(COMPOSE_FILE)
 
-.PHONY: help install-dev test smoke compose-config deploy verify logs stop rollback install-shim uninstall-shim
+.PHONY: help install-dev test smoke compose-config deploy verify logs stop rollback notify-test install-shim uninstall-shim
 
 help:
 	@printf '%s\n' \
@@ -16,6 +16,7 @@ help:
 		'  make logs            Follow Docker Compose logs' \
 		'  make stop            Stop the Docker Compose stack' \
 		'  make rollback        Stop the stack and remove local data volumes' \
+		'  make notify-test     Send a desktop notification test' \
 		'  make install-shim    Install the host Codex PATH shim explicitly' \
 		'  make uninstall-shim  Remove the host Codex PATH shim'
 
@@ -45,6 +46,9 @@ stop:
 
 rollback:
 	$(COMPOSE) down -v --remove-orphans
+
+notify-test:
+	PYTHONPATH=src $(PYTHON) -m codex_speed notify-test
 
 install-shim:
 	PYTHONPATH=src $(PYTHON) -m codex_speed install-shim

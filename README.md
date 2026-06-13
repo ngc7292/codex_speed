@@ -93,6 +93,29 @@ Remove the shim:
 make uninstall-shim
 ```
 
+## Desktop Attention Notifications
+
+When host Codex invocations are tracked through the shim, `codex-speed` also
+runs a local attention agent inside the wrapper process. It scans current
+terminal output in memory and sends a desktop notification when Codex appears
+to be waiting for approval, permission, or user input. It also notifies when an
+active session has produced output and then stays quiet for the pause timeout.
+
+The agent does not persist prompt or response text and does not send output
+text to Prometheus. To verify desktop notification permissions:
+
+```bash
+make notify-test
+```
+
+Configuration:
+
+```bash
+CODEX_SPEED_NOTIFY=0 codex ...
+CODEX_SPEED_NOTIFY_PAUSE_SECONDS=180 codex ...
+CODEX_SPEED_NOTIFY_DEDUPE_SECONDS=600 codex ...
+```
+
 ## Local Development
 
 Install the package in editable mode:
@@ -135,6 +158,7 @@ make verify          Check daemon, Prometheus, Grafana, and scrape status
 make logs            Follow Docker Compose logs
 make stop            Stop the Docker Compose stack
 make rollback        Stop the stack and remove local data volumes
+make notify-test     Send a desktop notification test
 make install-shim    Install the host Codex PATH shim explicitly
 make uninstall-shim  Remove the host Codex PATH shim
 ```

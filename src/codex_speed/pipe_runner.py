@@ -13,6 +13,7 @@ from collections.abc import Sequence
 from codex_speed.ansi import visible_byte_count
 from codex_speed.events import DaemonAddress
 from codex_speed.jsonl import extract_turn_usage, parse_json_line
+from codex_speed.notifier_agent import AttentionAgent, from_env
 from codex_speed.reporter import EventReporter
 from codex_speed.tokens import estimate_tokens_from_bytes
 
@@ -33,7 +34,10 @@ def run_pipe_command(
 
     session = str(uuid.uuid4())
     reporter = EventReporter(address)
+    attention = from_env()
     reporter.send({"type": "session_start", "mode": mode, "session": session})
+    attention.start_session(session, mode)
+    attention.start_background_checks()
     start_time = time.monotonic()
     stdin_is_piped = not sys.stdin.isatty()
     child_stdin = subprocess.PIPE if stdin_is_piped else None
@@ -48,6 +52,8 @@ def run_pipe_command(
     except OSError as exc:
         print(f"codex-speed: failed to start Codex: {exc}", file=sys.stderr)
         reporter.send({"type": "session_end", "mode": mode, "session": session})
+        attention.end_session(session)
+        attention.stop_background_checks()
         return 127
 
     assert process.stdout is not None
@@ -56,12 +62,12 @@ def run_pipe_command(
     threads = [
         threading.Thread(
             target=_read_stdout,
-            args=(process.stdout, reporter, session, mode, parse_stdout_jsonl),
+            args=(process.stdout, reporter, session, mode, parse_stdout_jsonl, attention),
             daemon=True,
         ),
         threading.Thread(
             target=_read_stderr,
-            args=(process.stderr, reporter, session, mode),
+            args=(process.stderr, reporter, session, mode, attention),
             daemon=True,
         ),
     ]
@@ -70,7 +76,7 @@ def run_pipe_command(
         threads.append(
             threading.Thread(
                 target=_copy_stdin,
-                args=(process.stdin, reporter, session, mode),
+                args=(process.stdin, reporter, session, mode, attention),
                 daemon=True,
             )
         )
@@ -83,6 +89,8 @@ def run_pipe_command(
     reporter.send({"type": "turn_duration", "mode": mode, "session": session, "seconds": elapsed})
     reporter.send({"type": "child_exit", "mode": mode, "session": session, "code": return_code})
     reporter.send({"type": "session_end", "mode": mode, "session": session})
+    attention.end_session(session)
+    attention.stop_background_checks()
     return return_code
 
 
@@ -91,6 +99,7 @@ def _copy_stdin(
     reporter: EventReporter,
     session: str,
     mode: str,
+    attention: AttentionAgent | None = None,
 ) -> None:
     writable = child_stdin
     try:
@@ -101,6 +110,8 @@ def _copy_stdin(
             writable.write(data)  # type: ignore[attr-defined]
             writable.flush()  # type: ignore[attr-defined]
             _report_io(reporter, session, mode, "input", "stdin", data)
+            if attention is not None:
+                attention.observe_input(session)
     except BrokenPipeError:
         return
     finally:
@@ -116,6 +127,7 @@ def _read_stdout(
     session: str,
     mode: str,
     parse_jsonl: bool,
+    attention: AttentionAgent | None = None,
 ) -> None:
     readable = stdout
     buffer = b""
@@ -126,6 +138,8 @@ def _read_stdout(
         sys.stdout.buffer.write(chunk)
         sys.stdout.buffer.flush()
         _report_io(reporter, session, mode, "output", "stdout", chunk)
+        if attention is not None:
+            attention.observe_output(session, chunk)
         if parse_jsonl:
             buffer += chunk
             while b"\n" in buffer:
@@ -135,7 +149,13 @@ def _read_stdout(
         _handle_json_line(buffer, reporter, session, mode)
 
 
-def _read_stderr(stderr: object, reporter: EventReporter, session: str, mode: str) -> None:
+def _read_stderr(
+    stderr: object,
+    reporter: EventReporter,
+    session: str,
+    mode: str,
+    attention: AttentionAgent | None = None,
+) -> None:
     readable = stderr
     while True:
         chunk = readable.read(8192)  # type: ignore[attr-defined]
@@ -144,6 +164,8 @@ def _read_stderr(stderr: object, reporter: EventReporter, session: str, mode: st
         sys.stderr.buffer.write(chunk)
         sys.stderr.buffer.flush()
         _report_io(reporter, session, mode, "output", "stderr", chunk)
+        if attention is not None:
+            attention.observe_output(session, chunk)
 
 
 def _handle_json_line(line: bytes, reporter: EventReporter, session: str, mode: str) -> None:
